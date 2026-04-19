@@ -20,6 +20,20 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
             substituters = https://cache.nixos.org
+            max-jobs = auto
+
+      - name: Restore /nix/store from GHA cache
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-functional-tests-${{ github.sha }}
+          restore-prefixes-first-match: |
+            nix-${{ runner.os }}-${{ runner.arch }}-functional-tests-
+          gc-max-store-size-macos: 5000000000
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-${{ runner.arch }}-functional-tests-
+          purge-created-max-age: 604800
+          purge-last-accessed-max-age: 604800
+          purge-primary-key: never
 
       - name: Sanity check — host arch is native x86_64
         run: |
