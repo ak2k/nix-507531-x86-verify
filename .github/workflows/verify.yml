@@ -12,7 +12,7 @@ concurrency:
 jobs:
   functional-tests:
     name: Functional tests (x86_64-darwin)
-    runs-on: macos-13  # native Intel x86_64, no Rosetta
+    runs-on: macos-13-large  # native Intel x86_64, no Rosetta
     timeout-minutes: 60
     steps:
       - uses: cachix/install-nix-action@v31
@@ -58,7 +58,7 @@ jobs:
 
   reproduce-bug-on-real-binary:
     name: Confirm bug reproduces on cached x86_64 artifact
-    runs-on: macos-13
+    runs-on: macos-13-large
     timeout-minutes: 20
     steps:
       - uses: cachix/install-nix-action@v31
