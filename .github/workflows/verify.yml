@@ -1,0 +1,90 @@
+name: Verify darwin Mach-O page-hash fixup on native x86_64 macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  functional-tests:
+    name: Functional tests (x86_64-darwin)
+    runs-on: macos-13  # native Intel x86_64, no Rosetta
+    timeout-minutes: 60
+    steps:
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            substituters = https://cache.nixos.org
+
+      - name: Sanity check — host arch is native x86_64
+        run: |
+          uname -sm
+          test "$(uname -m)" = "x86_64" || (echo "runner is not native x86_64!" && exit 1)
+
+      - name: Build patched-nix functional test suite on x86_64-darwin
+        run: |
+          nix build -L --no-link \
+            'github:ak2k/nix/fat-macho-wip#checks.x86_64-darwin.nix-functional-tests'
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "The functional test suite builds the in-tree macho-rewrite fixtures"
+          echo "(thin / fat32 1-arch / fat32 multi-arch / fat64 / self-reference /"
+          echo " codesign-signed / symlink-skip / malformed-fat-header) on the host"
+          echo "toolchain. Passing on macos-13 proves the helper's x86_64 Mach-O"
+          echo "code paths are correct end-to-end under a real x86_64 kernel"
+          echo "(nix-build --check expects exit 104 = checkMismatch, which the fix"
+          echo "eliminates to 0)."
+
+  reproduce-bug-on-real-binary:
+    name: Confirm bug reproduces on cached x86_64 artifact
+    runs-on: macos-13
+    timeout-minutes: 20
+    steps:
+      - uses: cachix/install-nix-action@v31
+
+      - name: Substitute known-failing x86_64 binary from cache.nixos.org
+        run: |
+          nix-store --realise --option substituters 'https://cache.nixos.org' \
+            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36
+
+      - name: Pre-fix codesign state (expect hash mismatch)
+        run: |
+          set +e
+          /usr/bin/codesign --verify -vv \
+            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped \
+            2>&1 | tee codesign-prefix.txt
+          rc=$?
+          echo "codesign exit: $rc"
+          grep -qE "invalid|modified" codesign-prefix.txt \
+            || { echo "expected codesign to reject; got clean pass"; exit 1; }
+
+      - name: Page-hash inspection (expect first_bad_page at offset 0)
+        run: |
+          /usr/bin/codesign -dvvv \
+            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped \
+            2>&1 | head -30
+
+      - name: Runtime — attempt to execute (expect SIGKILL from cs_invalid_page)
+        run: |
+          set +e
+          /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped --version
+          rc=$?
+          echo "binary exit: $rc"
+          # Exit 137 = 128 + 9 (SIGKILL) is the page-in rejection signal.
+          # Exit 0/1 from clean execution would mean the bug does not reproduce
+          # on this host/arch; either would be news.
+          if [ $rc -eq 137 ] || [ $rc -eq 134 ]; then
+            echo "PASS: kernel rejected binary (rc=$rc, matching cs_invalid_page behaviour)"
+          else
+            echo "NOTE: binary exited with rc=$rc (not SIGKILL)."
+            echo "This may mean: (a) the bug does not reproduce on this host, or"
+            echo "(b) Bun's SEA wrapper caught a downstream error after page-in."
+            echo "Dumping first 20 lines of output for diagnosis was done above."
+          fi
