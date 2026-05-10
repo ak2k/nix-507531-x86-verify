@@ -1,4 +1,4 @@
-name: Verify darwin Mach-O page-hash fixup on native x86_64 macOS
+name: Verify darwin Mach-O page-hash fixup on native macOS
 
 on:
   workflow_dispatch:
@@ -11,8 +11,8 @@ concurrency:
 
 jobs:
   functional-tests:
-    name: Functional tests (x86_64-darwin)
-    runs-on: macos-13  # native Intel x86_64, no Rosetta
+    name: Functional tests (aarch64-darwin)
+    runs-on: macos-15  # native Apple Silicon (arm64); macos-13 (x86_64) is no longer hosted
     timeout-minutes: 60
     steps:
       - uses: cachix/install-nix-action@v31
@@ -35,60 +35,59 @@ jobs:
           purge-last-accessed-max-age: 604800
           purge-primary-key: never
 
-      - name: Sanity check — host arch is native x86_64
+      - name: Sanity check — host arch is native arm64
         run: |
           uname -sm
-          test "$(uname -m)" = "x86_64" || (echo "runner is not native x86_64!" && exit 1)
+          test "$(uname -m)" = "arm64" || (echo "runner is not native arm64!" && exit 1)
 
-      - name: Build patched-nix functional test suite on x86_64-darwin
+      - name: Build patched-nix functional test suite on aarch64-darwin
         run: |
           nix build -L --no-link \
-            'github:ak2k/nix/darwin-mach-o-extension-test#checks.x86_64-darwin.nix-functional-tests'
+            'github:ak2k/nix/darwin-mach-o-extension-test#checks.aarch64-darwin.nix-functional-tests'
 
       - name: Summary
         if: always()
         run: |
           echo "The functional test suite builds the in-tree macho-rewrite fixtures"
           echo "(thin / fat32 1-arch / fat32 multi-arch / fat64 / self-reference /"
-          echo " codesign-signed / symlink-skip / malformed-fat-header) on the host"
-          echo "toolchain. Passing on macos-13 proves the helper's x86_64 Mach-O"
-          echo "code paths are correct end-to-end under a real x86_64 kernel"
-          echo "(nix-build --check expects exit 104 = checkMismatch, which the fix"
-          echo "eliminates to 0)."
+          echo " codesign-signed / symlink-skip / malformed-fat-header /"
+          echo " post-link-modify) on the host toolchain. Passing on macos-15"
+          echo "proves the helper's arm64 Mach-O code paths are correct end-to-end"
+          echo "under a real Apple Silicon kernel."
 
   reproduce-bug-on-real-binary:
-    name: Confirm bug reproduces on cached x86_64 artifact
-    runs-on: macos-13
+    name: Confirm bug reproduces on cached arm64 artifact
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: cachix/install-nix-action@v31
 
-      - name: Substitute known-failing x86_64 binary from cache.nixos.org
+      - name: Substitute known-failing arm64 binary from cache.nixos.org
         run: |
           nix-store --realise --option substituters 'https://cache.nixos.org' \
-            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36
+            /nix/store/fpcmaqm4a8df6c38wzh5lz7s7d12178q-tailwindcss_4-4.2.4
 
       - name: Pre-fix codesign state (expect hash mismatch)
         run: |
           set +e
           /usr/bin/codesign --verify -vv \
-            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped \
+            /nix/store/fpcmaqm4a8df6c38wzh5lz7s7d12178q-tailwindcss_4-4.2.4/bin/.tailwindcss-wrapped \
             2>&1 | tee codesign-prefix.txt
           rc=$?
           echo "codesign exit: $rc"
           grep -qE "invalid|modified" codesign-prefix.txt \
             || { echo "expected codesign to reject; got clean pass"; exit 1; }
 
-      - name: Page-hash inspection (expect first_bad_page at offset 0)
+      - name: Page-hash inspection
         run: |
           /usr/bin/codesign -dvvv \
-            /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped \
+            /nix/store/fpcmaqm4a8df6c38wzh5lz7s7d12178q-tailwindcss_4-4.2.4/bin/.tailwindcss-wrapped \
             2>&1 | head -30
 
       - name: Runtime — attempt to execute (expect SIGKILL from cs_invalid_page)
         run: |
           set +e
-          /nix/store/9bl5v7src87m9b44v08fcnxxn8vmpa0z-filen-cli-0.0.36/bin/.filen-wrapped --version
+          /nix/store/fpcmaqm4a8df6c38wzh5lz7s7d12178q-tailwindcss_4-4.2.4/bin/.tailwindcss-wrapped --help
           rc=$?
           echo "binary exit: $rc"
           # Exit 137 = 128 + 9 (SIGKILL) is the page-in rejection signal.
