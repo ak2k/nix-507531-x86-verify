@@ -43,7 +43,7 @@ jobs:
       - name: Build patched-nix functional test suite on x86_64-darwin
         run: |
           nix build -L --no-link \
-            'github:ak2k/nix/fat-macho-wip#checks.x86_64-darwin.nix-functional-tests'
+            'github:ak2k/nix/darwin-mach-o-extension-test#checks.x86_64-darwin.nix-functional-tests'
 
       - name: Summary
         if: always()
